@@ -1,0 +1,66 @@
+WITH LatestNetWorth AS 
+    (
+    SELECT cmb.CUSTOMERID, ca.*
+    from raw.companyaccounts ca
+    left join raw.maincompanies mc on mc.ID = ca.MAINCOMPANYID
+    left join base.customer_mst__base cmb on cmb.registrationnumber = mc.registrationnumber
+    QUALIFY row_number() over(PARTITION BY customerid ORDER BY ACCOUNTINGTODATE desc) = 1
+	), 
+
+Recent_CATO_Adverse AS 
+
+
+(
+SELECT 
+customerid, 
+sum(ct.REJECTEDPAYMENTS) RejectedPayments, 
+sum(ct.MAXEXCESS) DaysInExcess,    
+FROM RAW_CATO.CATO_FINANCIALACCOUNTTURNOVERITEMS ct
+WHERE ct.REPORTINGMONTHDATE > dateadd(month,-6,current_date())
+AND FACILITYTYPE = '15'
+GROUP BY CUSTOMERID 
+)
+
+	
+SELECT  am.APPLICATIONDATE,
+        am.LOCATORID,
+        DECISIONREASON, 
+        CALCULATEDTURNOVER, 
+        CALCULATEDTURNOVER_SOURCE, 
+        nw.NETWORTH,
+        nw.ACCOUNTINGTODATE,
+         
+
+FROM ANALYTICS.APPLICATIONMASTER am
+
+LEFT JOIN (
+SELECT * 
+FROM RISK.APPLICATIONRULERUN
+WHERE FRAUD_RULES_APPROVED = '1'
+AND COMPLIANCE_RULES_APPROVED = '1'
+Qualify row_number () over (Partition by locatorid order by createdat desc) =1
+) rr ON am.LOCATORID = rr.LOCATORID 
+
+LEFT JOIN LatestNetWorth nw ON nw.CUSTOMERID = am.CUSTOMERID
+LEFT JOIN RECENT_CATO_ADVERSE rca ON rca.CUSTOMERID = am.CUSTOMERID
+
+Left join ( 
+
+Select * 
+from analytics.rulerunmaster 
+where CODE in ('CRNCD','GWNCF')
+and result =1
+Qualify row_number () Over (Partition by customerid order by createdat desc) =1
+
+) rrm on rrm.customerid = am.customerid
+
+WHERE DECISIONREASON = 'Credit Score'
+AND am.CALCULATEDTURNOVER > 50000
+AND nw.NETWORTH > 250000
+AND am.APPLICATIONDATE > dateadd(MONTH ,-6,current_date)
+AND am.CALCULATEDTURNOVER_SOURCE != '7. Accounts - 40% Total Current Assets and Stated Turnover Average'
+AND am.CALCULATEDTURNOVER_SOURCE != '8. Accounts - 40% Total Current Assets'
+AND rca.RejectedPayments <= 2
+AND rca.DaysInExcess <= 5 
+AND rrm.customerid is null
+ORDER BY am.APPLICATIONDATE DESC
